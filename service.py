@@ -283,6 +283,70 @@ class mediaOrganizer:
 		self.videoOrganized = False
 		self.audioOrganized = False
 
+class showRssParser():
+    def __init__(self, notifier, settings):
+        # initialize the cache
+        self.cache = RotatingCache("ShowRssParser.Cache")
+        self.notifier = notifier
+        self.settings = settings
+        
+    def run(self):
+        #Initialize communication with transmission
+        url = 'http://' + self.settings.host + ':' + self.settings.port + '/transmission/rpc'
+        h = httplib2.Http(__addondir__ + "/.cache" , timeout=1.0)
+        if self.settings.user:
+            h.add_credentials(self.settings.user, self.settings.pwd)
+        h.add_credentials('user', 'pwd')
+        resp, content = h.request(url, "GET")
+        out.debug(str(resp))
+        headers = { "X-Transmission-Session-Id": resp['x-transmission-session-id'] }
+
+        # get feed and check is read ok and it correct
+        feed = feedparser.parse(self.settings.feedUrl)
+        if feed.bozo:
+            out.error('Bozo feed: %s' % feed.bozo_exception.getMessage())
+            return False
+
+        numLinksParsed = 0
+        # iterate over the entries
+        for entry in reversed(feed.entries):
+            if not entry.has_key('tv_episode_id'):
+                out.warn('Found entry with missing episode id ... skipping')
+                continue
+            id = entry['tv_episode_id']
+            
+            if id in self.cache.items:
+                out.info('Entry "%s": already downloaded ... skipping' % id)
+                continue
+
+            if not entry.has_key('tv_show_name'):
+                out.warn('Entry "%s": no showname found ... skipping' % id)
+                continue
+            show = entry['tv_show_name']
+
+            if len(entry.enclosures) >= 1:
+                link = entry.enclosures[0].href
+            else:
+                out.warn('Entry "%s": no magnet link available ... skipping' % id)
+                continue
+
+            try:
+                body = dumps( { "method": "torrent-add", "arguments": { "filename": link } } )
+                response, content = h.request(url, 'POST', headers=headers, body=body)
+            except Exception as e:
+                out.error('Error sending to transmission: %s' % e)
+            else:
+                if str(content).find("success") == -1:
+                    out.warn("Could not send link to transmission: " + content)
+                else:
+                    out.info('Started download of new episode of "%s" ' % (show))
+                    self.cache.add(id)
+                    numLinksParsed = numLinksParsed + 1 
+        self.cache.write()
+        if numLinksParsed >= 1:
+            self.notifier.send('Sent ' + str(numLinksParsed) + ' episodes to transmission' , 2000)
+
+
 class transmissionProxy:
 	def __init__(self, notifier,settings):
 		self.notifier = notifier 
