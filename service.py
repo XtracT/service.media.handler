@@ -327,7 +327,7 @@ class showRssParser():
             if len(entry.enclosures) >= 1:
                 link = entry.enclosures[0].href
             else:
-                out.warn('Entry "%s": no magnet link available ... skipping' % id)
+                out.warn('Entry "%s": no magnet link available .. skipping' % id)
                 continue
 
             try:
