@@ -1,22 +1,25 @@
 <?xml version="1.0" encoding="utf-8" standalone="yes"?>
 <settings>
 	<category label="General">
+      <setting label="Stop everything when playing" type="bool" id="play_nice" default="true"/>
+      <setting label="Show notifications" type="bool" id="show_notifications" default="true"/>
+	</category>
+    <category label="Media Org.">
+      <setting label="Interval (min) (-1 to not run)" type="number" id="mo_sleep_time" default="60"/>
       <setting label="Delete non media files" type="bool" id="delete_files" default="false"/>
       <setting label="Update libraries when done" type="bool" id="update_libraries" default="true"/>
-      <setting label="Run peridically" type="bool" id="run_periodically" default="true"/>
-      <setting label="Show notifications" type="bool" id="show_notifications" default="true"/>
-      <setting label="Interval (min)" type="number" id="sleep_time" default="60"/>
-	</category>
-    <category label="Folders">
-	  <setting label="Files source folder" type="folder" id="source_folder" source="videos" option="writeable" default=""/>
-	  <setting label="Unorganizable files folder" type="folder" id="check_folder" source="auto" option="writeable" default=""/>
+	<setting label="Files source folder" type="folder" id="source_folder" source="videos" option="writeable" default=""/>
+	<setting label="Unorganizable files folder" type="folder" id="check_folder" source="auto" option="writeable" default=""/>
       <setting label="Movies folder" type="folder" id="movies_folder" source="videos" option="writeable" default=""/>
       <setting label="Shows folder" type="folder" id="shows_folder" source="videos" option="writeable" default=""/>
       <setting label="Anime folder" type="folder" id="anime_folder" source="videos" option="writeable" default=""/>
       <setting label="Music folder" type="folder" id="music_folder" source="audio" option="writeable" default=""/>
       </category>
       <category label="ShowRss">
-	  <setting label="ShowRSS feed" type="text" id="feed_url" default="http://showrss.info/user/38432.rss?magnets=true&namespaces=true&name=null&quality=fhd&re=yes"/>
+      <setting label="Interval (min) (-1 to not run)" type="number" id="showrss_sleep_time" default="60"/>
+	<setting label="ShowRSS feed" type="text" id="feed_url" default="http://showrss.info/user/38432.rss?magnets=true&namespaces=true&name=null&quality=fhd&re=yes"/>
+      </category>
+      <category label="Transmission">
       <setting label="Host" type="text" id="host"  default="localhost"/>
       <setting label="Port" type="number" id="port"  default="9091"/>
       <setting label="User" type="text" id="user"  default="user"/>
