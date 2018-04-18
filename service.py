@@ -14,8 +14,6 @@ from os import path
 from sys import exit 
 from json import dumps
 
-
-
 #  scp service.py root@libreelec:~/.kodi/addons/service.media.organizer/
 # zip -r service.media.organizer.zip service.media.organizer/ && scp service.media.organizer.zip root@libreelec:~/
 
@@ -113,18 +111,11 @@ class advNotifications:
     def sendOverride(self,text,time):
 	    xbmc.executebuiltin('Notification(%s, %s, %d, %s)' % (__addonname__, text, time, __icon__))
 
-class mediaOrganizerSettings():
-    def __init__(self,notifier):
-		self.notifier = notifier
-		self.deleteFiles = False
-		self.updateLibraries = True
-		self.enableNotifications = True
+class mediaOrganizer:
+	def __init__(self, notifier,settings):
 		self.runPeriodically = False
 		self.intervalRun = 60		
 		self.paths = {'source': [], 'check': [], 'movies': [], 'shows': [], 'anime': [], 'music': [] }
-		self.load()
-
-    def load(self):
 		self.deleteFiles = bool(__settings__.getSetting("delete_files"))
 		self.updateLibraries = bool(__settings__.getSetting("update_libraries"))
 		self.notifier.enableNotifications = bool(__settings__.getSetting("show_notifications"))
@@ -133,13 +124,15 @@ class mediaOrganizerSettings():
 
 		self.deleteFiles = False
 		self.updateLibraries = True
+		self.enableNotifications = True
 
 		for key in self.paths.iteritems():
 			self.paths[key[0]] = xbmc.translatePath(__settings__.getSetting( str(key[0]) + "_folder"))
 			if not os.path.isdir(self.paths[key[0]]):
 				self.paths[key[0]] = self.paths['source']
+		self.checkSettings()
     
-    def check(self):
+    def checkSettings(self):
 		if not os.path.isdir(self.paths['source']):
 			out.error('Source path is not a valid directory')
 			self.notifier.sendOverride('Source path is not a valid directory. Change, restart service!', 2000)
@@ -150,37 +143,99 @@ class mediaOrganizerSettings():
 			return False
 		return True
 
-class showRssParserSettings():
-    def __init__(self,notifier):
-        self.notifier = notifier
-        self.feedUrl = 'http://showrss.info/user/38432.rss?magnets=true&namespaces=true&name=null&quality=null&re=null'
-        self.host = 'localhost'
-        self.port = '9091'
-        self.user = None
-        self.pwd = None
-        self.runPeriodically = False
-        self.intervalRun = 60
-        self.showNotifications = True
-        self.load()
+	def run(self):
+		if not self.checkSettings():
+			return False
+			
+		fileCounter = 0
+		videoOrganized = False
+		audioOrganized = False
 
-    def load(self):
-        self.feedUrl = __settings__.getSetting("feed_url")
-        self.host= __settings__.getSetting("host")
-        self.port = __settings__.getSetting("port")
-        self.user = __settings__.getSetting("user")
-        self.pwd = __settings__.getSetting("pwd")
-        self.runPeriodically= bool(__settings__.getSetting("run_periodically"))
-        self.intervalRun = int(__settings__.getSetting("sleep_time"))
-        self.notifier.enableNotifications = bool(__settings__.getSetting("show_notifications"))
+		for root, dirs, files in os.walk(self.paths['source'], topdown=False):
+			for fileName in files:
+				fileCounter += 1
 
-    def check(self):
-        # check the feed uri
+		if fileCounter > 0:
+			fileNum = 0
+			for root, dirs, files in os.walk(self.paths['source'], topdown=False):
+				for fileName in files:
+					fileNum = fileNum + 1
+					fullfileName = os.path.join(root, fileName)
+					fileType = find_fileType(fullfileName)
+					out.debug(str(fullfileName) + str(fileType))
+					if fileType=="Video":
+						videoOrganized = True
+						info = untangle.Untangle(fileName, use_meta_info=False)  # Get info from the file
+						if bool(info.id) & is_not_sample_file(fullfileName): #
+							if info.type_video == "MOVIE":
+								destination_folder = os.path.join(self.paths['movies'],info.proper_title + " (" + str(info.year) + ")" )
+							elif info.type_video == "SHOW":
+								destination_folder = os.path.join(self.paths['shows'],info.proper_title, "Season "  + str(info.season).zfill(2))
+							elif info.type_video == "ANIME":
+								destination_folder = os.path.join(self.paths['anime'], info.proper_title, "Season " + str(info.season).zfill(2))
+							else:
+								destination_folder = os.path.join(self.paths['check'],info.proper_title + " (" + str(info.year) + ")" )
+							move_to_folder(fullfileName, destination_folder, fileName)
+						elif not is_not_sample_file(fullfileName):
+							os.remove(fullfileName)
+						else:
+							if self.deleteFiles:
+								out.debug('I am deleting video file bitch')
+								os.remove(fullfileName)
+							else:
+								move_to_folder(fullfileName, self.paths['check'], fileName)
+					elif fileType=="Audio":
+						audioOrganized = True
+						fileFolder = root.replace(self.paths['source'], '')
+						destination_folder = os.path.join(self.paths['music'], fileFolder)
+						move_to_folder(fullfileName, destination_folder, fileName)
+					else:
+						if self.deleteFiles:
+							out.debug('I am deleting unknown file bitch')
+							os.remove(fullfileName)
+						else:
+							out.debug('moving file to folder ' + str(fullfileName) + str(self.paths['check']) + str(fileName))
+							move_to_folder(fullfileName, self.paths['check'], fileName)
+
+				# Remove empty directories
+				if os.listdir(root) == [] :
+					if root!=self.paths['source']:
+						os.rmdir(root)
+			
+			if fileCounter >= 1:
+				self.notifier.send(str(fileCounter) + ' files organized!', 500)
+
+		if self.updateLibraries and videoOrganized:
+			xbmc.executebuiltin('UpdateLibrary(video)')
+			time.sleep(0.1)
+			xbmc.executebuiltin('CleanLibrary(video)')
+		elif self.updateLibraries and audioOrganized:
+			xbmc.executebuiltin('UpdateLibrary(music)')
+			time.sleep(0.1)
+			xbmc.executebuiltin('CleanLibrary(music)')
+
+class showRssParser():
+    def __init__(self,transmission):
+		# initialize the cache
+		self.transmission = transmission
+		self.cache = RotatingCache("ShowRssParser.Cache")
+		self.feedUrl = 'http://showrss.info/user/38432.rss?magnets=true&namespaces=true&name=null&quality=null&re=null'
+		self.feedUrl = __settings__.getSetting("feed_url")
+		self.runPeriodically= bool(__settings__.getSetting("run_periodically"))
+		self.intervalRun = int(__settings__.getSetting("sleep_time"))
+		if self.checkSettings()
+			pass
+		else:
+			__settings__.openSettings()
+ 
+	def checkSettings(self):
+		# check the feed uri
 		if self.feedUrl.find('namespaces=true') == -1 or self.feedUrl.find('magnets=true') == -1:
 			out.error('Invalid feed URL. Magnets and namespaces are required')
 			self.notifier.sendOverride('Invalid feed URL. Magnets and namespaces are required', 2000)
 			return False
 
-        # try to get the feed
+		# try to get the feed
 		try:
 			feed = feedparser.parse(self.feedUrl)
 		except Exception as e:
@@ -188,121 +243,12 @@ class showRssParserSettings():
 			self.notifier.sendOverride('Error getting to the feed. Check connection!', 2000)
 			return False
 
-		if not self.user or not self.pwd:
-			self.notifier.sendOverride('Transmission needs to have auth on (user:pwd) to work ', 2000)
-			return False
-
-        # check connection to transmission-rpc
-		url = 'http://' + self.host + ':' + self.port + '/transmission/rpc'
-		h = httplib2.Http(__addondir__ + "/.cache" , timeout=1.0)
-		if self.user:
-			h.add_credentials(self.user, self.pwd)
-		try:
-			resp, content = h.request(url, "GET")
-		except Exception as e:
-			out.error('Error getting transmission: %s' % e)
-			self.notifier.sendOverride('Could not reach transmission-rpc. Check settings', 2000)
-			return False
-		return True
-
-class mediaOrganizer:
-	def __init__(self, notifier,settings):
-		self.notifier = notifier 
-		self.settings = settings
-		self.fileCounter = 0
-		self.videoOrganized = False
-		self.audioOrganized = False
-		self.interval = settings.intervalRun 
-
-	def run(self):
-		for root, dirs, files in os.walk(self.settings.paths['source'], topdown=False):
-			for fileName in files:
-				self.fileCounter += 1
-
-		if self.fileCounter > 0:
-			fileNum = 0
-			for root, dirs, files in os.walk(self.settings.paths['source'], topdown=False):
-				for fileName in files:
-					fileNum = fileNum + 1
-					fullfileName = os.path.join(root, fileName)
-					fileType = find_fileType(fullfileName)
-					out.debug(str(fullfileName) + str(fileType))
-					if fileType=="Video":
-						self.videoOrganized = True
-						info = untangle.Untangle(fileName, use_meta_info=False)  # Get info from the file
-						if bool(info.id) & is_not_sample_file(fullfileName): #
-							if info.type_video == "MOVIE":
-								destination_folder = os.path.join(self.settings.paths['movies'],info.proper_title + " (" + str(info.year) + ")" )
-							elif info.type_video == "SHOW":
-								destination_folder = os.path.join(self.settings.paths['shows'],info.proper_title, "Season "  + str(info.season).zfill(2))
-							elif info.type_video == "ANIME":
-								destination_folder = os.path.join(self.settings.paths['anime'], info.proper_title, "Season " + str(info.season).zfill(2))
-							else:
-								destination_folder = os.path.join(self.settings.paths['check'],info.proper_title + " (" + str(info.year) + ")" )
-							move_to_folder(fullfileName, destination_folder, fileName)
-						elif not is_not_sample_file(fullfileName):
-							os.remove(fullfileName)
-						else:
-							if self.settings.deleteFiles:
-								out.debug('I am deleting video file bitch')
-								os.remove(fullfileName)
-							else:
-								move_to_folder(fullfileName, self.settings.paths['check'], fileName)
-					elif fileType=="Audio":
-						self.audioOrganized = True
-						fileFolder = root.replace(self.settings.paths['source'], '')
-						destination_folder = os.path.join(self.settings.paths['music'], fileFolder)
-						move_to_folder(fullfileName, destination_folder, fileName)
-					else:
-						if self.settings.deleteFiles:
-							out.debug('I am deleting unknown file bitch')
-							os.remove(fullfileName)
-						else:
-							out.debug('moving file to folder ' + str(fullfileName) + str(self.settings.paths['check']) + str(fileName))
-							move_to_folder(fullfileName, self.settings.paths['check'], fileName)
-
-				# Remove empty directories
-				if os.listdir(root) == [] :
-					if root!=self.settings.paths['source']:
-						os.rmdir(root)
-			
-			if self.fileCounter >= 1:
-				self.notifier.send(str(self.fileCounter) + ' files organized!', 500)
-				self.fileCounter = 0
-
-	def update_libraries(self):
-		if self.settings.updateLibraries and self.videoOrganized:
-			xbmc.executebuiltin('UpdateLibrary(video)')
-			time.sleep(0.1)
-			xbmc.executebuiltin('CleanLibrary(video)')
-		elif self.settings.updateLibraries and self.audioOrganized:
-			xbmc.executebuiltin('UpdateLibrary(music)')
-			time.sleep(0.1)
-			xbmc.executebuiltin('CleanLibrary(music)')
-		
-		self.videoOrganized = False
-		self.audioOrganized = False
-
-class showRssParser():
-    def __init__(self, notifier, settings):
-        # initialize the cache
-        self.cache = RotatingCache("ShowRssParser.Cache")
-        self.notifier = notifier
-        self.settings = settings
-        
     def run(self):
-        #Initialize communication with transmission
-        url = 'http://' + self.settings.host + ':' + self.settings.port + '/transmission/rpc'
-        h = httplib2.Http(__addondir__ + "/.cache" , timeout=1.0)
-        if self.settings.user:
-            h.add_credentials(self.settings.user, self.settings.pwd)
-        h.add_credentials('user', 'pwd')
-        resp, content = h.request(url, "GET")
-        out.debug(str(resp))
-        headers = { "X-Transmission-Session-Id": resp['x-transmission-session-id'] }
+		if not self.checkSettings():
+			return False
 
         # get feed and check is read ok and it correct
-        feed = feedparser.parse(self.settings.feedUrl)
+        feed = feedparser.parse(self.feedUrl)
         if feed.bozo:
             out.error('Bozo feed: %s' % feed.bozo_exception.getMessage())
             return False
@@ -331,8 +277,9 @@ class showRssParser():
                 continue
 
             try:
-                body = dumps( { "method": "torrent-add", "arguments": { "filename": link } } )
-                response, content = h.request(url, 'POST', headers=headers, body=body)
+                body = dumps( { "method": "torrent-add", "arguments": { "filename": link } } )		
+                response, content = self.transmission.getData(body)
+
             except Exception as e:
                 out.error('Error sending to transmission: %s' % e)
             else:
@@ -348,17 +295,35 @@ class showRssParser():
 
 
 class transmissionProxy:
-	def __init__(self, notifier,settings):
-		self.notifier = notifier 
-		self.settings = settings
-		self.url = 'http://' + self.settings.host + ':' + self.settings.port + '/transmission/rpc'
+	def __init__(self):
+		self.host= __settings__.getSetting("host")
+        self.port = __settings__.getSetting("port")
+        self.user = __settings__.getSetting("user")
+        self.pwd = __settings__.getSetting("pwd")
+		self.url = 'http://' + self.host + ':' + self.port + '/transmission/rpc'
 		self.h = httplib2.Http(__addondir__ + "/.cache" , timeout=5.0)
-		if self.settings.user:
-			self.h.add_credentials(self.settings.user, self.settings.pwd)
-		#h.add_credentials('user', 'pwd')
-		resp, content = self.h.request(self.url, "GET")
-		#out.debug(str(resp))
-		self.headers = { "X-Transmission-Session-Id": resp['x-transmission-session-id'] }
+		if self.user:
+			self.h.add_credentials(self.user, self.pwd)
+
+		if self.checkSettings()
+			pass
+		else:
+			__settings__.openSettings()
+
+	def checkSettings():
+		# check connection to transmission-rpc
+		if not self.user or not self.pwd:
+			self.notifier.sendOverride('Transmission needs to have auth on (user:pwd) to work ', 2000)
+			return False
+
+		try:
+			resp, content = self.h.request(self.url, "GET")
+			self.headers = { "X-Transmission-Session-Id": resp['x-transmission-session-id'] }
+		except Exception as e:
+			out.error('Error getting transmission: %s' % e)
+			self.notifier.sendOverride('Could not reach transmission-rpc. Check settings', 2000)
+			return False
+		return True
 
 	def getData(self, body):
 		try:
@@ -367,7 +332,7 @@ class transmissionProxy:
 			out.error('Error sending to transmission: %s' % e)
 			return False
 		else:
-			return response
+			return response, content
 
 	def start(self):
 		hey = 1
@@ -385,7 +350,6 @@ class transmissionProxy:
 		self.getData(body)
 
 class Monitor(xbmc.Monitor):
-
 	def __init__(self, *args, **kwargs):
 		xbmc.Monitor.__init__(self)
 		self.id = xbmcaddon.Addon().getAddonInfo('id')
@@ -400,14 +364,10 @@ class Monitor(xbmc.Monitor):
 	def onScreensaverDeactivated(self):
 		self.idle = False
 
-
-#TO-DO
-create_symlink = True
-
 class transmissionCtrl:
 	def __init__(self,notifier,settings,transmission):
 		self.trans = transmission
-		self.interval = 10
+		self.interval = 10 # seconds
 
 	def run(self):
 		if monitor.idle:
@@ -446,27 +406,18 @@ class taskCtrl:
 				self.tasks[i].fun.run()
 
 out = LogOutput()
+notifier = advNotifications()
 monitor = Monitor()
 
 if __name__ == '__main__':
-	notifier = advNotifications()
-	settings = mediaOrganizerSettings(notifier)
-	settingsParser = showRssParserSettings(notifier)
-	transmission = transmissionProxy(notifier,settingsParser)
-	organizer = mediaOrganizer(notifier,settings)
-	transControl = transmissionCtrl(notifier,settingsParser,transmission)
-	tasker = taskCtrl(organizer,transControl)
+	transmission = transmissionProxy()
+	parser = showRssParser(transmission)
+	organizer = mediaOrganizer()
+	transControl = transmissionCtrl(transmission)
+	tasker = taskCtrl(parser,organizer,transControl)
 
-	out.debug('loading settings')
-	settings.load()
-
-	if settings.check():
-		while not monitor.abortRequested():
-			while xbmc.Player().isPlaying() and not monitor.abortRequested():
-				monitor.waitForAbort(5)
-			tasker.runTasks()
-	else:
-		__settings__.openSettings()
-		while not monitor.abortRequested():
-			if monitor.waitForAbort(60):
-				break
+	while not monitor.abortRequested():
+		while xbmc.Player().isPlaying() and not monitor.abortRequested():
+			monitor.waitForAbort(5)
+		tasker.runTasks()
+		monitor.waitForAbort(5)
