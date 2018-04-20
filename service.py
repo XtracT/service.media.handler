@@ -119,7 +119,7 @@ class mediaOrganizer:
         self.paths = {'source': [], 'check': [], 'movies': [], 'shows': [], 'anime': [], 'music': [] }
         self.deleteFiles = bool(__settings__.getSetting("delete_files"))
         self.updateLibraries = bool(__settings__.getSetting("update_libraries"))
-        self.interval = int(__settings__.getSetting("mo_sleep_time"))
+        self.interval = int(__settings__.getSetting("mo_sleep_time")) * 60 
         self.deleteFiles = False
         self.updateLibraries = True
 
@@ -127,7 +127,10 @@ class mediaOrganizer:
             self.paths[key[0]] = xbmc.translatePath(__settings__.getSetting( str(key[0]) + "_folder"))
             if not os.path.isdir(self.paths[key[0]]):
                 self.paths[key[0]] = self.paths['source']
-        self.checkSettings()
+        
+        if not self.checkSettings():
+            notifier.sendOverride("Media Organizer settings did not go through" , 1000)
+            __settings__.openSettings()
     
     def checkSettings(self):
         if not os.path.isdir(self.paths['source']):
@@ -218,10 +221,9 @@ class showRssParser():
         self.cache = RotatingCache("ShowRssParser.Cache")
         self.feedUrl = 'http://showrss.info/user/38432.rss?magnets=true&namespaces=true&name=null&quality=null&re=null'
         self.feedUrl = __settings__.getSetting("feed_url")
-        self.interval = int(__settings__.getSetting("showrss_sleep_time"))
-        if self.checkSettings():
-            pass
-        else:
+        self.interval = int(__settings__.getSetting("showrss_sleep_time")) * 60 
+        if not self.checkSettings():
+            notifier.sendOverride("ShowRSS Parser settings did not go through" , 1000)
             __settings__.openSettings()
  
     def checkSettings(self):
@@ -238,6 +240,7 @@ class showRssParser():
             out.error('Error getting the feed: %s' % e)
             notifier.sendOverride('Error getting to the feed. Check connection!', 2000)
             return False
+        return True
 
     def run(self):
         if not self.checkSettings():
@@ -301,9 +304,8 @@ class transmissionProxy:
         if self.user:
             self.h.add_credentials(self.user, self.pwd)
 
-        if self.checkSettings():
-            pass
-        else:
+        if not self.checkSettings():
+            notifier.sendOverride("Transmission settings did not go through" , 1000)
             __settings__.openSettings()
 
     def checkSettings(self):
@@ -319,6 +321,7 @@ class transmissionProxy:
             out.error('Error getting transmission: %s' % e)
             notifier.sendOverride('Could not reach transmission-rpc. Check settings', 2000)
             return False
+
         return True
 
     def getData(self, body):
@@ -331,11 +334,13 @@ class transmissionProxy:
             return response, content
 
     def start(self):
-        hey = 1
+        body = dumps( {"method":"torrent-start","arguments":{} } )
+        self.getData(body)
         return True
     
     def stop(self):
-        hey = 2
+        body = dumps( {"method":"torrent-stop","arguments":{} } )
+        self.getData(body)
         return True
 
     def setAltSpeed(self,state):	
@@ -380,20 +385,43 @@ class Monitor(xbmc.Monitor):
         self.idle = False
 
 class transmissionCtrl:
+    class transmissionRemover:
+        def __init__(self,interval):
+            self.interval = interval
+
+        def run(self):
+            out.debug("I should be removing old torrents now")
+
     def __init__(self,transmission):
         self.trans = transmission
         self.interval = 10 # seconds
+        self.altspeed = False
+        self.active = True
+        self.removeOld = True
+        self.removeOldInterval = 1 * 60 #minutes
+        if self.removeOld:
+            self.remover = self.transmissionRemover(self.removeOldInterval)
+            tasker.add(self.remover)
 
     def run(self):
-        if monitor.idle:
+        if monitor.idle and self.altspeed:
             self.trans.setAltSpeed(False)
-        else:
+            self.altspeed = False
+            out.debug("Idle: normal speed")
+        elif not self.altspeed :
             self.trans.setAltSpeed(True)
+            self.altspeed = True
+            out.debug("Active: Alternative speed")
         
-        if xbmc.Player().isPlaying():
+        if xbmc.Player().isPlaying() and self.active:
             self.trans.stop()
-        else:
+            self.active = False
+            out.debug("Playing: stop transmission")
+        elif not self.active :
             self.trans.start()
+            self.active = True
+            out.debug("Start transmission")
+    
 
 class taskCtrl:
     class taskData:
@@ -401,8 +429,10 @@ class taskCtrl:
             self.fun = fun
             self.lastTimeStamp = 0
 
-    def __init__(self, *arg):
+    def __init__(self):
         self.tasks = []
+
+    def add(self,*arg):
         for i in range(len(arg)):
             if arg[i].interval:
                 task = self.taskData(arg[i])
@@ -423,6 +453,7 @@ class taskCtrl:
 out = LogOutput()
 notifier = advNotifications()
 monitor = Monitor()
+tasker = taskCtrl()
 
 if __name__ == '__main__':
     playNice = bool(__settings__.getSetting("play_nice"))
@@ -430,7 +461,7 @@ if __name__ == '__main__':
     parser = showRssParser(transmission)
     organizer = mediaOrganizer()
     transControl = transmissionCtrl(transmission)
-    tasker = taskCtrl(parser,organizer,transControl)
+    tasker.add(parser,organizer,transControl)
 
     while not monitor.abortRequested():
         if playNice:
