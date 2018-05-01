@@ -10,6 +10,7 @@ import resources.lib.untangle as untangle
 import httplib2
 import subprocess
 import simplecache
+import requests
 
 
 from pickle import load, dump
@@ -327,6 +328,10 @@ class transmissionProxy:
     def getData(self, body):
         try:
             response, content = self.h.request(self.url, 'POST', headers=self.headers, body=body)
+            if str(content).find("invalid session-id header") >= 0:            
+                self.headers = { "X-Transmission-Session-Id": response['x-transmission-session-id'] }
+                response, content = self.h.request(self.url, 'POST', headers=self.headers, body=body)
+
         except Exception as e:
             out.error('Error sending to transmission: %s' % e)
             return False
@@ -334,12 +339,12 @@ class transmissionProxy:
             return response, content
 
     def start(self):
-        body = dumps( {"method":"torrent-start","arguments":{} } )
+        body = dumps( {"method":"torrent-start" } )
         self.getData(body)
         return True
     
     def stop(self):
-        body = dumps( {"method":"torrent-stop","arguments":{} } )
+        body = dumps( {"method":"torrent-stop" } )
         self.getData(body)
         return True
 
@@ -392,6 +397,16 @@ class transmissionCtrl:
         def run(self):
             out.debug("I should be removing old torrents now")
 
+            # for torrent in client.get_torrents():
+            #     if torrent.error or torrent.status != "seeding":
+            #         continue
+            #     rule_set = find_rule_set(torrent)
+            #     if torrent.ratio > rule_set['max_ratio']:
+            #         remove_torrent(client, torrent, "max_ratio threshold passed", dry_run=False)
+            #     if torrent.secondsSeeding > rule_set['min_time']:
+            #         remove_torrent(client, torrent, "min_time threshold passed", dry_run=False)
+
+
     def __init__(self,transmission):
         self.trans = transmission
         self.interval = 10 # seconds
@@ -408,7 +423,7 @@ class transmissionCtrl:
             self.trans.setAltSpeed(False)
             self.altspeed = False
             out.debug("Idle: normal speed")
-        elif not self.altspeed :
+        elif not monitor.idle and not self.altspeed:
             self.trans.setAltSpeed(True)
             self.altspeed = True
             out.debug("Active: Alternative speed")
@@ -417,7 +432,7 @@ class transmissionCtrl:
             self.trans.stop()
             self.active = False
             out.debug("Playing: stop transmission")
-        elif not self.active :
+        elif not xbmc.Player().isPlaying() and not self.active :
             self.trans.start()
             self.active = True
             out.debug("Start transmission")
@@ -448,7 +463,10 @@ class taskCtrl:
             elapsed = time.time() - self.tasks[i].lastTimeStamp
             if elapsed >= self.tasks[i].fun.interval :
                 self.tasks[i].lastTimeStamp = time.time()
-                self.tasks[i].fun.run()
+                try:
+                    self.tasks[i].fun.run()
+                except:
+                    out.warn('This task could not be run')
 
 out = LogOutput()
 notifier = advNotifications()
